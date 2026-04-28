@@ -140,8 +140,9 @@ async def github_auth_start(
     return_to: str | None = None,
     _: None = Depends(auth_rate_limit),
 ):
-    if not settings.github_client_id or not settings.github_client_secret:
-        raise error("GitHub OAuth is not configured", 500)
+    client_id, client_secret = settings.github_credentials_for(client)
+    if not client_id or not client_secret:
+        raise error(f"GitHub OAuth is not configured for client type '{client}'", 500)
 
     callback_uri = redirect_uri or "http://localhost:8000/auth/github/callback"
     stored_state, _, challenge = await store_oauth_state(
@@ -152,7 +153,7 @@ async def github_auth_start(
         code_challenge=code_challenge,
     )
     oauth_url = build_github_oauth_url(
-        client_id=settings.github_client_id,
+        client_id=client_id,
         redirect_uri=callback_uri,
         state=stored_state,
         code_challenge=challenge,
@@ -173,6 +174,7 @@ async def github_auth_callback_get(
         raise error("External callback clients must exchange code with POST /auth/github/callback", 400)
 
     github_user = await exchange_github_code(
+        client_type=oauth_state["client_type"],
         code=code,
         redirect_uri=oauth_state["redirect_uri"],
         code_verifier=oauth_state["code_verifier"],
@@ -210,6 +212,7 @@ async def github_auth_callback_post(
 
     redirect_uri = payload.redirect_uri or oauth_state["redirect_uri"]
     github_user = await exchange_github_code(
+        client_type=oauth_state["client_type"],
         code=payload.code,
         redirect_uri=redirect_uri,
         code_verifier=verifier,

@@ -162,10 +162,20 @@ async def consume_oauth_state(state: str):
     )
 
 
-async def exchange_github_code(*, code: str, redirect_uri: str, code_verifier: str) -> dict:
+async def exchange_github_code(
+    *,
+    client_type: str,
+    code: str,
+    redirect_uri: str,
+    code_verifier: str,
+) -> dict:
+    client_id, client_secret = settings.github_credentials_for(client_type)
+    if not client_id or not client_secret:
+        raise ValueError(f"GitHub OAuth is not configured for client type '{client_type}'")
+
     payload = {
-        "client_id": settings.github_client_id,
-        "client_secret": settings.github_client_secret,
+        "client_id": client_id,
+        "client_secret": client_secret,
         "code": code,
         "redirect_uri": redirect_uri,
         "code_verifier": code_verifier,
