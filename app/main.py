@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from starlette.exceptions import HTTPException as StarletteHTTPException # Added
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import get_settings
 from app.db import database, engine, metadata
@@ -47,9 +47,9 @@ from app.services import (
     revoke_refresh_token,
     rotate_refresh_token,
     store_oauth_state,
-    get_test_auth_role, # Added
+    get_test_auth_role,
     upsert_user,
-    upsert_test_user, # Added
+    upsert_test_user,
 )
 
 
@@ -68,7 +68,7 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_origin_regex=r"https?://.*", # Addition
+    allow_origin_regex=r"https?://.*",
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
@@ -92,20 +92,29 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     errors = exc.errors()
     first = errors[0] if errors else {}
     message = first.get("msg", "Invalid input").replace("Value error, ", "")
-    status_code = 400 if "empty" in message or "missing" in message.lower() else 422
+    message_lower = message.lower()
+    status_code = 400 if (
+        "empty" in message_lower
+        or "missing" in message_lower
+        or "required" in message_lower
+    ) else 422
     return JSONResponse(
         status_code=status_code,
         content={"status": "error", "message": message},
     )
 
-# Added to handle errors
+
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    if isinstance(exc.detail, dict):
+        return JSONResponse(status_code=exc.status_code, content=exc.detail)
+
     message = exc.detail if isinstance(exc.detail, str) else "Request failed"
     return JSONResponse(
         status_code=exc.status_code,
         content={"status": "error", "message": message},
-    )# Ends
+    )
+
 
 @app.exception_handler(jwt.PyJWTError)
 async def jwt_exception_handler(request: Request, exc: jwt.PyJWTError):
@@ -178,13 +187,12 @@ async def github_auth_callback_get(
     code: str | None = None,
     state: str | None = None,
     _: None = Depends(auth_rate_limit),
-): 
-    # Addition
+):
     if not code:
         raise error("code is required", 400)
     if not state:
         raise error("state is required", 400)
-# Ends
+
     oauth_state = await get_oauth_state(state)
     if not oauth_state:
         raise error("Invalid or expired OAuth state", 400)
@@ -218,7 +226,6 @@ async def github_auth_callback_post(
     payload: AuthExchangeRequest,
     _: None = Depends(auth_rate_limit),
 ):
-    # Addition
     if not payload.code:
         raise error("code is required", 400)
     if not payload.state:
@@ -240,7 +247,7 @@ async def github_auth_callback_post(
                 "is_active": user["is_active"],
             },
         }
-# Ends
+
     oauth_state = await get_oauth_state(payload.state)
     if not oauth_state:
         raise error("Invalid or expired OAuth state", 400)
@@ -308,9 +315,9 @@ async def who_am_i(user=Depends(get_current_user)):
         },
     }
 
-# Addition
-@app.get("/api/users/me")
-async def current_api_user(user=Depends(get_current_user)):
+
+@app.get("/api/users/me", dependencies=[Depends(require_api_version)])
+async def current_api_user(user=Depends(require_role("admin", "analyst"))):
     return {
         "status": "success",
         "data": {
@@ -323,7 +330,8 @@ async def current_api_user(user=Depends(get_current_user)):
             "last_login_at": user["last_login_at"].isoformat() if user["last_login_at"] else None,
             "created_at": user["created_at"].isoformat(),
         },
-    } # ends
+    }
+
 
 @app.get("/api/dashboard", dependencies=[Depends(require_api_version)])
 async def dashboard_metrics(user=Depends(require_role("admin", "analyst"))):
