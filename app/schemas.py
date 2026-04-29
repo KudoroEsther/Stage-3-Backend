@@ -17,8 +17,8 @@ class ProfileRequest(BaseModel):
 
 
 class AuthExchangeRequest(BaseModel):
-    code: str
-    state: str
+    code: str | None = None
+    state: str | None = None
     code_verifier: str | None = None
     redirect_uri: str | None = None
 

@@ -37,6 +37,7 @@ class Settings(BaseModel):
     refresh_token_ttl_seconds: int = int(
         os.getenv("REFRESH_TOKEN_TTL_SECONDS", "300")
     )
+    enable_test_auth: bool = os.getenv("ENABLE_TEST_AUTH", "true").lower() == "true" #Addition
     auth_rate_limit_per_minute: int = int(
         os.getenv("AUTH_RATE_LIMIT_PER_MINUTE", "10")
     )

@@ -65,6 +65,13 @@ def ensure_utc_datetime(value: datetime | None) -> datetime | None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
 
+# Addition
+def get_test_auth_role(*, code: str, state: str) -> str:
+    combined = f"{code} {state}".lower()
+    if "admin" in combined:
+        return "admin"
+    return "analyst"
+#Ends
 
 def apply_filters(
     query,
@@ -262,6 +269,25 @@ async def upsert_user(github_user: dict):
     )
     user = await database.fetch_one(users.select().where(users.c.id == user_id))
     return dict(user)
+
+# Addition
+async def upsert_test_user(role: str):
+    github_user = {
+        "github_id": f"test-{role}",
+        "username": f"test-{role}",
+        "email": f"test-{role}@example.com",
+        "avatar_url": None,
+    }
+    user = await upsert_user(github_user)
+    if user["role"] != role or not user["is_active"]:
+        await database.execute(
+            users.update()
+            .where(users.c.id == user["id"])
+            .values(role=role, is_active=True)
+        )
+        user = await database.fetch_one(users.select().where(users.c.id == user["id"]))
+    return dict(user)
+#Ends
 
 
 async def issue_token_pair(user: dict) -> dict:
