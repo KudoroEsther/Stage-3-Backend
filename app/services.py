@@ -1,7 +1,7 @@
 import csv
 import io
 import asyncio
-from datetime import timedelta
+from datetime import timedelta, UTC, datetime
 from urllib.parse import urlencode
 
 import httpx
@@ -57,6 +57,13 @@ def get_age_group(age: int) -> str:
 
 def profile_dict(row) -> dict:
     return dict(row)
+
+def ensure_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def apply_filters(
@@ -149,7 +156,16 @@ async def get_oauth_state(state: str):
     record = await database.fetch_one(
         oauth_states.select().where(oauth_states.c.state == state)
     )
-    if not record or record["consumed_at"] is not None or record["expires_at"] <= utcnow():
+    # if not record or record["consumed_at"] is not None or record["expires_at"] <= utcnow():
+    #     return None
+    # return dict(record)
+
+    if not record:
+        return None
+
+    consumed_at = ensure_utc_datetime(record["consumed_at"])
+    expires_at = ensure_utc_datetime(record["expires_at"])
+    if consumed_at is not None or (expires_at is not None and expires_at <= utcnow()):
         return None
     return dict(record)
 
