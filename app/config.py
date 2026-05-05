@@ -44,6 +44,22 @@ class Settings(BaseModel):
     api_rate_limit_per_minute: int = int(
         os.getenv("API_RATE_LIMIT_PER_MINUTE", "60")
     )
+    # Caching
+    query_cache_ttl_seconds: int = int(
+        os.getenv("QUERY_CACHE_TTL_SECONDS", "30")
+    )
+    profile_detail_cache_ttl_seconds: int = int(
+        os.getenv("PROFILE_DETAIL_CACHE_TTL_SECONDS", "60")
+    )
+    dashboard_cache_ttl_seconds: int = int(
+        os.getenv("DASHBOARD_CACHE_TTL_SECONDS", "30")
+    )
+    csv_upload_chunk_size: int = int(
+        os.getenv("CSV_UPLOAD_CHUNK_SIZE", "1000")
+    )
+    max_concurrent_uploads: int = int(
+        os.getenv("MAX_CONCURRENT_UPLOADS", "2")
+    )
     cors_origins: list[str] = [
         origin.strip()
         for origin in os.getenv("CORS_ORIGINS", "http://localhost:8000").split(",")
