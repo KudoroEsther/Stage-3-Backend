@@ -18,6 +18,14 @@ profiles = sqlalchemy.Table(
     sqlalchemy.Column("country_probability", sqlalchemy.Float, nullable=False),
     sqlalchemy.Column("created_at", sqlalchemy.String, nullable=False),
 )
+# Indexing
+sqlalchemy.Index("ix_profiles_gender", profiles.c.gender)
+sqlalchemy.Index("ix_profiles_age_group", profiles.c.age_group)
+sqlalchemy.Index("ix_profiles_country_id", profiles.c.country_id)
+sqlalchemy.Index("ix_profiles_age", profiles.c.age)
+sqlalchemy.Index("ix_profiles_gender_probability", profiles.c.gender_probability)
+sqlalchemy.Index("ix_profiles_country_probability", profiles.c.country_probability)
+sqlalchemy.Index("ix_profiles_created_at", profiles.c.created_at)
 
 users = sqlalchemy.Table(
     "users",
@@ -32,6 +40,7 @@ users = sqlalchemy.Table(
     sqlalchemy.Column("last_login_at", sqlalchemy.DateTime(timezone=True), nullable=True),
     sqlalchemy.Column("created_at", sqlalchemy.DateTime(timezone=True), nullable=False),
 )
+sqlalchemy.Index("ix_users_role", users.c.role)
 
 refresh_tokens = sqlalchemy.Table(
     "refresh_tokens",
@@ -43,6 +52,8 @@ refresh_tokens = sqlalchemy.Table(
     sqlalchemy.Column("created_at", sqlalchemy.DateTime(timezone=True), nullable=False),
     sqlalchemy.Column("revoked_at", sqlalchemy.DateTime(timezone=True), nullable=True),
 )
+sqlalchemy.Index("ix_refresh_tokens_user_id", refresh_tokens.c.user_id)
+sqlalchemy.Index("ix_refresh_tokens_expires_at", refresh_tokens.c.expires_at)
 
 oauth_states = sqlalchemy.Table(
     "oauth_states",
@@ -57,3 +68,4 @@ oauth_states = sqlalchemy.Table(
     sqlalchemy.Column("expires_at", sqlalchemy.DateTime(timezone=True), nullable=False),
     sqlalchemy.Column("consumed_at", sqlalchemy.DateTime(timezone=True), nullable=True),
 )
+sqlalchemy.Index("ix_oauth_states_expires_at", oauth_states.c.expires_at)
