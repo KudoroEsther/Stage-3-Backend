@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+import asyncio
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -18,9 +19,10 @@ os.environ["ENABLE_TEST_AUTH"] = "true"
 
 from fastapi.testclient import TestClient
 
+from app.cache import query_cache
 from app.dependencies import _rate_windows
 from app.main import app
-from app.models import oauth_states, refresh_tokens, users
+from app.models import oauth_states, profiles, refresh_tokens, users
 
 
 class AuthApiContractTests(unittest.TestCase):
@@ -35,6 +37,7 @@ class AuthApiContractTests(unittest.TestCase):
 
     def setUp(self):
         _rate_windows.clear()
+        asyncio.run(query_cache.clear())
         self._clear_tables()
 
     def _clear_tables(self):
@@ -42,6 +45,7 @@ class AuthApiContractTests(unittest.TestCase):
 
         with engine.begin() as connection:
             connection.execute(oauth_states.delete())
+            connection.execute(profiles.delete())
             connection.execute(refresh_tokens.delete())
             connection.execute(users.delete())
 
