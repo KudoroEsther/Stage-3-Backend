@@ -4,14 +4,15 @@ from datetime import UTC, datetime
 import httpx
 import jwt
 import sqlalchemy
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, File, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.cache import query_cache
 from app.config import get_settings
-from app.db import database, engine, metadata
+from app.db import database, prepare_database
 from app.dependencies import (
     auth_rate_limit,
     error,
@@ -23,6 +24,7 @@ from app.dependencies import (
 )
 from app.models import profiles, users
 from app.nlp import parse_query
+from app.query_utils import build_profiles_cache_key, normalize_profile_filters
 from app.schemas import (
     AuthExchangeRequest,
     LogoutRequest,
@@ -51,14 +53,29 @@ from app.services import (
     upsert_user,
     upsert_test_user,
 )
+from app.uploads import process_csv_upload
 
 
 settings = get_settings()
 
 
+async def invalidate_profile_query_cache(*, profile_id: str | None = None) -> None:
+    """
+    Broad cache invalidation keeps write handling simple and predictable.
+    That matches the design goal of reducing read load without adding
+    complicated cache dependency tracking.
+    """
+
+    await query_cache.invalidate_prefix("profiles:list:")
+    await query_cache.invalidate_prefix("profiles:search:")
+    await query_cache.invalidate_prefix("dashboard:summary:")
+    if profile_id:
+        await query_cache.invalidate(f"profiles:detail:{profile_id}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    metadata.create_all(engine)
+    prepare_database()
     await database.connect()
     yield
     await database.disconnect()
@@ -335,6 +352,11 @@ async def current_api_user(user=Depends(require_role("admin", "analyst"))):
 
 @app.get("/api/dashboard", dependencies=[Depends(require_api_version)])
 async def dashboard_metrics(user=Depends(require_role("admin", "analyst"))):
+    cache_key = f"dashboard:summary:{user['role']}"
+    cached = await query_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     total_profiles = await database.fetch_val(
         sqlalchemy.select(sqlalchemy.func.count()).select_from(profiles)
     )
@@ -342,7 +364,7 @@ async def dashboard_metrics(user=Depends(require_role("admin", "analyst"))):
         sqlalchemy.select(profiles.c.gender, sqlalchemy.func.count().label("count"))
         .group_by(profiles.c.gender)
     )
-    return {
+    response = {
         "status": "success",
         "data": {
             "total_profiles": total_profiles,
@@ -350,6 +372,12 @@ async def dashboard_metrics(user=Depends(require_role("admin", "analyst"))):
             "current_user_role": user["role"],
         },
     }
+    await query_cache.set(
+        cache_key,
+        response,
+        settings.dashboard_cache_ttl_seconds,
+    )
+    return response
 
 
 @app.get("/api/profiles", dependencies=[Depends(require_api_version)])
@@ -368,16 +396,39 @@ async def list_profiles(
     limit: int = Query(default=10, ge=1, le=50),
     user=Depends(require_role("admin", "analyst")),
 ):
+    normalized_filters = normalize_profile_filters(
+        {
+            "gender": gender,
+            "age_group": age_group,
+            "country_id": country_id,
+            "min_age": min_age,
+            "max_age": max_age,
+            "min_gender_probability": min_gender_probability,
+            "min_country_probability": min_country_probability,
+        }
+    )
+    cache_key = build_profiles_cache_key(
+        namespace="profiles:list",
+        filters=normalized_filters,
+        page=page,
+        limit=limit,
+        sort_by=sort_by,
+        order=order,
+    )
+    cached = await query_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     base_query = profiles.select()
     base_query = apply_filters(
         base_query,
-        gender,
-        age_group,
-        country_id,
-        min_age,
-        max_age,
-        min_gender_probability,
-        min_country_probability,
+        normalized_filters.get("gender"),
+        normalized_filters.get("age_group"),
+        normalized_filters.get("country_id"),
+        normalized_filters.get("min_age"),
+        normalized_filters.get("max_age"),
+        normalized_filters.get("min_gender_probability"),
+        normalized_filters.get("min_country_probability"),
     )
     base_query = apply_sorting(base_query, sort_by, order)
     total = await database.fetch_val(
@@ -385,7 +436,9 @@ async def list_profiles(
     )
     rows = await database.fetch_all(paginate(base_query, page, limit))
     payload = pagination_payload(request=request, page=page, limit=limit, total=total)
-    return {"status": "success", **payload, "data": [profile_dict(row) for row in rows]}
+    response = {"status": "success", **payload, "data": [profile_dict(row) for row in rows]}
+    await query_cache.set(cache_key, response, settings.query_cache_ttl_seconds)
+    return response
 
 
 @app.get("/api/profiles/search", dependencies=[Depends(require_api_version)])
@@ -403,13 +456,24 @@ async def search_profiles(
     if filters is None:
         raise error("Unable to interpret query", 400)
 
+    normalized_filters = normalize_profile_filters(filters)
+    cache_key = build_profiles_cache_key(
+        namespace="profiles:search",
+        filters=normalized_filters,
+        page=page,
+        limit=limit,
+    )
+    cached = await query_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     base_query = apply_filters(
         profiles.select(),
-        filters.get("gender"),
-        filters.get("age_group"),
-        filters.get("country_id"),
-        filters.get("min_age"),
-        filters.get("max_age"),
+        normalized_filters.get("gender"),
+        normalized_filters.get("age_group"),
+        normalized_filters.get("country_id"),
+        normalized_filters.get("min_age"),
+        normalized_filters.get("max_age"),
         None,
         None,
     )
@@ -418,7 +482,9 @@ async def search_profiles(
     )
     rows = await database.fetch_all(paginate(base_query, page, limit))
     payload = pagination_payload(request=request, page=page, limit=limit, total=total)
-    return {"status": "success", **payload, "data": [profile_dict(row) for row in rows]}
+    response = {"status": "success", **payload, "data": [profile_dict(row) for row in rows]}
+    await query_cache.set(cache_key, response, settings.query_cache_ttl_seconds)
+    return response
 
 
 @app.get("/api/profiles/export", dependencies=[Depends(require_api_version)])
@@ -437,15 +503,26 @@ async def export_profiles(
     user=Depends(require_role("admin", "analyst")),
 ):
     _ = request
+    normalized_filters = normalize_profile_filters(
+        {
+            "gender": gender,
+            "age_group": age_group,
+            "country_id": country_id,
+            "min_age": min_age,
+            "max_age": max_age,
+            "min_gender_probability": min_gender_probability,
+            "min_country_probability": min_country_probability,
+        }
+    )
     query = apply_filters(
         profiles.select(),
-        gender,
-        age_group,
-        country_id,
-        min_age,
-        max_age,
-        min_gender_probability,
-        min_country_probability,
+        normalized_filters.get("gender"),
+        normalized_filters.get("age_group"),
+        normalized_filters.get("country_id"),
+        normalized_filters.get("min_age"),
+        normalized_filters.get("max_age"),
+        normalized_filters.get("min_gender_probability"),
+        normalized_filters.get("min_country_probability"),
     )
     query = apply_sorting(query, sort_by, order)
     rows = [profile_dict(row) for row in await database.fetch_all(query)]
@@ -462,16 +539,28 @@ async def export_profiles(
 
 @app.get("/api/profiles/{profile_id}", dependencies=[Depends(require_api_version)])
 async def get_profile(profile_id: str, user=Depends(require_role("admin", "analyst"))):
+    cache_key = f"profiles:detail:{profile_id}"
+    cached = await query_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     row = await database.fetch_one(profiles.select().where(profiles.c.id == profile_id))
     if not row:
         raise error("Profile not found", 404)
-    return {"status": "success", "data": profile_dict(row)}
+    response = {"status": "success", "data": profile_dict(row)}
+    await query_cache.set(
+        cache_key,
+        response,
+        settings.profile_detail_cache_ttl_seconds,
+    )
+    return response
 
 
 @app.post("/api/profiles", dependencies=[Depends(require_api_version)])
 async def create_profile(payload: ProfileRequest, user=Depends(require_role("admin"))):
     profile, existed = await insert_profile(payload.name)
     response = {"status": "success", "data": profile}
+    await invalidate_profile_query_cache(profile_id=profile["id"])
     if existed:
         response["message"] = "Profile already exists"
         return JSONResponse(status_code=200, content=response)
@@ -484,7 +573,21 @@ async def delete_profile(profile_id: str, user=Depends(require_role("admin"))):
     if not row:
         raise error("Profile not found", 404)
     await database.execute(profiles.delete().where(profiles.c.id == profile_id))
+    await invalidate_profile_query_cache(profile_id=profile_id)
     return Response(status_code=204)
+
+
+@app.post("/api/profiles/upload", dependencies=[Depends(require_api_version)])
+async def upload_profiles_csv(
+    file: UploadFile = File(...),
+    user=Depends(require_role("admin")),
+):
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise error("CSV file required", 400)
+
+    summary = await process_csv_upload(file)
+    await invalidate_profile_query_cache()
+    return summary
 
 
 @app.get("/api/admin/users", dependencies=[Depends(require_api_version)])
@@ -507,5 +610,6 @@ async def update_user_role(
         .where(users.c.id == user_id)
         .values(role=payload.role, is_active=payload.is_active)
     )
+    await query_cache.invalidate_prefix("dashboard:summary:")
     updated = await database.fetch_one(users.select().where(users.c.id == user_id))
     return {"status": "success", "data": dict(updated)}
