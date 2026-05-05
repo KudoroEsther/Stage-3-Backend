@@ -4,6 +4,8 @@ Converts plain English queries into structured filter dicts.
 No AI or LLMs used.
 """
 
+import re
+
 COUNTRY_MAP = {
     "nigeria": "NG", "nigerian": "NG",
     "ghana": "GH", "ghanaian": "GH",
@@ -81,6 +83,10 @@ def parse_query(q: str) -> dict | None:
     if not q_lower:
         return None
 
+    # Normalize punctuation variants first so equivalent age phrases parse the
+    # same way before we build filters and cache keys.
+    q_lower = q_lower.replace("–", "-").replace("—", "-")
+
     filters: dict[str, int | str] = {}
 
     for word, gender in GENDER_WORDS.items():
@@ -100,8 +106,6 @@ def parse_query(q: str) -> dict | None:
             filters["max_age"] = 24
             break
 
-    import re
-
     above_match = re.search(r"(?:above|over|older than)\s+(\d+)", q_lower)
     if above_match:
         filters["min_age"] = int(above_match.group(1))
@@ -110,10 +114,15 @@ def parse_query(q: str) -> dict | None:
     if below_match:
         filters["max_age"] = int(below_match.group(1))
 
-    between_match = re.search(r"between\s+(\d+)\s+and\s+(\d+)", q_lower)
+    between_match = re.search(r"between(?:\s+ages?)?\s+(\d+)\s+and\s+(\d+)", q_lower)
     if between_match:
         filters["min_age"] = int(between_match.group(1))
         filters["max_age"] = int(between_match.group(2))
+
+    aged_range_match = re.search(r"(?:aged|age)\s+(\d+)\s*-\s*(\d+)", q_lower)
+    if aged_range_match:
+        filters["min_age"] = int(aged_range_match.group(1))
+        filters["max_age"] = int(aged_range_match.group(2))
 
     matched_country = None
     for country_name in sorted(COUNTRY_MAP.keys(), key=len, reverse=True):
